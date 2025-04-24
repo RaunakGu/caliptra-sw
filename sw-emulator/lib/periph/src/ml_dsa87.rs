@@ -77,8 +77,14 @@ const ML_DSA87_SIGN_RND_SIZE: usize = 32;
 /// ML_DSA87 MSG size
 const ML_DSA87_MSG_SIZE: usize = 64;
 
+/// ML_DSA87 external mu size
+const ML_DSA87_EXTERNAL_MU_SIZE: usize = 64;
+
 /// ML_DSA87 VERIFICATION size
 const ML_DSA87_VERIFICATION_SIZE_BYTES: usize = 64;
+
+/// ML_DSA87 CTX_CONFIG size
+const ML_DSA87_CTX_SIZE: usize = 256;
 
 /// ML_DSA87 PUBKEY size
 const ML_DSA87_PUBKEY_SIZE: usize = PK_LEN;
@@ -109,13 +115,21 @@ register_bitfields! [
             KEYGEN_AND_SIGN = 0b100,
         ],
         ZEROIZE OFFSET(3) NUMBITS(1) [],
-        PCR_SIGN OFFSET(4) NUMBITS(1) []
+        PCR_SIGN OFFSET(4) NUMBITS(1) [],
+        EXTERNAL_MU OFFSET(5) NUMBITS(1) [],
+        STREAM_MSG OFFSET(6) NUMBITS(1) [],
     ],
 
     /// Status Register Fields
     Status [
         READY OFFSET(0) NUMBITS(1) [],
         VALID OFFSET(1) NUMBITS(1) [],
+        MSG_STREAM_READY OFFSET(2) NUMBITS(1) [],
+    ],
+
+    /// Context Config Register Fields
+    CtxConfig [
+        CTX_SIZE OFFSET(0) NUMBITS(8) [],
     ],
 
     /// Key Vault Read Control Fields
@@ -134,6 +148,10 @@ register_bitfields! [
             KV_WRITE_FAIL = 2,
         ],
     ],
+
+    Strobe [
+        STROBE OFFSET(0) NUMBITS(4) [],
+    ]
 ];
 
 #[derive(Bus)]
@@ -176,6 +194,22 @@ pub struct Mldsa87 {
     /// Verification result
     #[register_array(offset = 0x0000_00d8, write_fn = write_access_fault)]
     verify_res: [u32; ML_DSA87_VERIFICATION_SIZE_BYTES / 4],
+
+    /// External mu
+    #[register_array(offset = 0x0000_0118)]
+    external_mu: [u32; ML_DSA87_EXTERNAL_MU_SIZE / 4],
+
+    /// Message Strobe
+    #[register(offset = 0x0000_0158)]
+    msg_strobe: ReadWriteRegister<u32, Strobe::Register>,
+
+    /// Context config
+    #[register(offset = 0x0000_015c)]
+    ctx_config: ReadWriteRegister<u32, CtxConfig::Register>,
+
+    /// Context
+    #[register_array(offset = 0x0000_0160)]
+    ctx: [u32; ML_DSA87_CTX_SIZE / 4],
 
     /// Public key
     #[register_array(offset = 0x0000_1000)]
@@ -248,12 +282,18 @@ impl Mldsa87 {
             name: [Self::NAME0_VAL, Self::NAME1_VAL],
             version: [Self::VERSION0_VAL, Self::VERSION1_VAL],
             control: ReadWriteRegister::new(0),
-            status: ReadOnlyRegister::new(Status::READY::SET.value),
+            status: ReadOnlyRegister::new(
+                Status::READY::SET.value + Status::MSG_STREAM_READY::SET.value,
+            ),
             entropy: Default::default(),
             seed: Default::default(),
             sign_rnd: Default::default(),
             msg: Default::default(),
             verify_res: Default::default(),
+            external_mu: Default::default(),
+            msg_strobe: ReadWriteRegister::new(0xf),
+            ctx_config: ReadWriteRegister::new(0),
+            ctx: [0; ML_DSA87_CTX_SIZE],
             pubkey: [0; ML_DSA87_PUBKEY_SIZE / 4],
             signature: [0; ML_DSA87_SIGNATURE_SIZE / 4],
             privkey_out: [0; ML_DSA87_PRIVKEY_SIZE / 4],
@@ -287,6 +327,10 @@ impl Mldsa87 {
         self.sign_rnd = Default::default();
         self.msg = Default::default();
         self.verify_res = Default::default();
+        self.external_mu = Default::default();
+        self.msg_strobe.reg.set(0);
+        self.ctx_config.reg.set(0);
+        self.ctx = [0; ML_DSA87_CTX_SIZE];
         self.pubkey = [0; ML_DSA87_PUBKEY_SIZE / 4];
         self.signature = [0; ML_DSA87_SIGNATURE_SIZE / 4];
         self.privkey_out = [0; ML_DSA87_PRIVKEY_SIZE / 4];
@@ -300,7 +344,7 @@ impl Mldsa87 {
         self.op_zeroize_complete_action = None;
         self.status
             .reg
-            .modify(Status::READY::SET + Status::VALID::CLEAR);
+            .modify(Status::READY::SET + Status::VALID::CLEAR + Status::MSG_STREAM_READY::SET);
     }
 
     /// On Write callback for `control` register
