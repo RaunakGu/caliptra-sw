@@ -257,6 +257,7 @@ jobs:
               --message-format json > /tmp/nextest-list.json
 
           sudo ${VARS} cargo-nextest nextest run \
+              --nocapture \
               "${COMMON_ARGS[@]}" \
               --test-threads=1 \
               --no-fail-fast \
